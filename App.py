@@ -1,3 +1,5 @@
+from firebase_bridge import firebase_component, send_to_js
+firebase_component()
 import streamlit as st
 
 st.set_page_config(page_title="Trivia Game", layout="wide")
