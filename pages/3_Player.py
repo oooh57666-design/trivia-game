@@ -6,79 +6,119 @@ import time
 st.set_page_config(page_title="Player", layout="wide")
 st.title("Player View")
 
-# Join / identity
-name = st.text_input("Your player name", value=st.session_state.player_name or "")
-if st.button("Join / Update name"):
-    st.session_state.player_name = name
-    if name and name not in [p["name"] for p in st.session_state.players]:
-        st.session_state.players.append({"name": name, "score": 0})
-    st.success(f"Joined as {name}")
-
-if not st.session_state.player_name:
-    st.info("Please enter a name and join to participate.")
+if not st.session_state.players:
+    st.info("No players yet. Join on Home.")
     st.stop()
 
-st.write(f"Hello, {st.session_state.player_name} — Score: {next((p['score'] for p in st.session_state.players if p['name']==st.session_state.player_name),0)}")
+# Ensure local name
+name = st.text_input("Your player name", value=st.session_state.local_name or "")
+if st.button("Join / Update name"):
+    if not name:
+        st.warning("Enter a name")
+    else:
+        st.session_state.local_name = name
+        if not any(p["name"] == name for p in st.session_state.players):
+            st.session_state.players.append({"id": name, "name": name, "score": 0})
+        st.success(f"Joined as {name}")
+        st.rerun()
+
+if not st.session_state.local_name:
+    st.info("Set your local name first.")
+    st.stop()
+
+player_id = st.session_state.local_name
+
+# Show personal score
+player = next((p for p in st.session_state.players if p["name"] == player_id), None)
+score = player["score"] if player else 0
+st.write(f"Hello, {player_id} — Score: {score}")
 
 st.markdown("---")
-st.header("Memory Round (if active)")
-mr = st.session_state.get("memory_round")
-if mr and st.session_state.game_phase.startswith("memory"):
-    phase = mr.get("phase","memorize")
-    seq = mr.get("sequence",[])
-    mem_time = st.session_state.settings.get("memorize_time",5)
-    entry_time = st.session_state.settings.get("entry_time",8)
-    if phase == "memorize":
-        st.write("Memorize this sequence:")
-        st.write(" ".join(seq))
-        st.write(f"You will have {entry_time} seconds to enter them when the sequence hides.")
-        if st.button("I finished memorizing (host may control actual timing)"):
-            # switch to entry
-            st.session_state.memory_round["phase"] = "entry"
-            st.experimental_rerun()
-    elif phase == "entry":
-        st.write("Enter the sequence values one-by-one. Submit each entry (auto-detect style).")
-        # display what user has entered so far
-        if "my_mem_entries" not in st.session_state:
-            st.session_state.my_mem_entries = []
-        entered = st.session_state.my_mem_entries
-        st.write("Entered:", " ".join(entered))
-        next_val = st.text_input("Next unit", key="mem_input")
-        if st.button("Submit unit"):
-            if next_val:
-                st.session_state.my_mem_entries.append(next_val.strip())
-                st.experimental_rerun()
-        if st.button("Finish memory entry (submit all)"):
-            # store results per player (simple)
-            if "memory_results" not in st.session_state:
-                st.session_state.memory_results = {}
-            st.session_state.memory_results[st.session_state.player_name] = st.session_state.my_mem_entries.copy()
-            st.success("Memory entry saved.")
+# Memory round participation
+if st.session_state.phase.startswith("memory"):
+    mr = st.session_state.memory
+    if not mr:
+        st.info("Memory round not started yet.")
+    else:
+        if mr.get("phase") == "memorize":
+            st.subheader("Memorize Phase")
+            seq = mr.get("sequence", [])
+            st.write("Memorize this:")
+            st.write(" ".join(seq))
+            st.write(f"You have {st.session_state.settings['memorize_time']} seconds (host controls timing).")
+            if st.button("I finished memorizing"):
+                st.session_state.memory["phase"] = "entry"
+                st.rerun()
+        elif mr.get("phase") == "entry":
+            st.subheader("Entry Phase")
+            # create per-player entry store
+            if "my_mem_entries" not in st.session_state:
+                st.session_state.my_mem_entries = []
+            st.write("Entered so far:", " ".join(st.session_state.my_mem_entries))
+            next_unit = st.text_input("Next unit", key="mem_next")
+            if st.button("Submit unit"):
+                if next_unit:
+                    st.session_state.my_mem_entries.append(next_unit.strip())
+                    st.experimental_set_query_params()  # light refresh helper
+                    st.rerun()
+            if st.button("Finish memory entry"):
+                st.session_state.suggestions[player_id] = st.session_state.my_mem_entries.copy()
+                st.success("Memory entry stored (for demo).")
+                st.rerun()
 else:
-    st.info("No active memory round.")
+    st.write("No active memory round.")
 
 st.markdown("---")
-st.header("Answering Questions")
-cq = st.session_state.get("current_question")
-if cq:
+# Answering current question
+cq = st.session_state.current_question
+if cq and not st.session_state.phase.startswith("memory"):
     st.subheader("Current question")
     st.write(cq.get("text"))
-    # Answer box + submit bottom-right emulation
+    # show main player's name at top
+    main = cq.get("main")
+    main_name = main
+    st.write(f"Main player: {main_name}")
+    # mandatory sub selection if you are main and haven't picked
+    # sub selection UI: only shown to main player when question active
+    if player_id == main:
+        st.write("You are the main player for this question. Pick a sub:")
+        options = [p["id"] for p in st.session_state.players if p["id"] != player_id]
+        sub_choice = st.selectbox("Choose sub (mandatory)", options, key="sub_choice")
+        if st.button("Confirm sub choice"):
+            st.session_state.current_question["sub"] = sub_choice
+            # reward chosen sub +50 immediately
+            subp = next((pp for pp in st.session_state.players if pp["id"] == sub_choice), None)
+            if subp:
+                subp["score"] = subp.get("score",0) + 50
+            st.success(f"Sub {sub_choice} chosen.")
+            st.rerun()
+
+    # Answer box minimal: text input + submit
     if "local_answer" not in st.session_state:
         st.session_state.local_answer = ""
-    answer = st.text_input("Your answer", value=st.session_state.local_answer, key="answer_input")
-    st.session_state.local_answer = answer
+    ans = st.text_input("Type your answer", value=st.session_state.local_answer, key="answer_input")
+    st.session_state.local_answer = ans
     if st.button("Submit answer"):
-        st.session_state.answers[st.session_state.player_name] = answer
-        st.success("Answer submitted. Waiting for reveal.")
+        st.session_state.answers[player_id] = {"answer": ans, "submitted": True}
+        st.success("Answer submitted.")
+        st.rerun()
 else:
-    st.write("Waiting for the host to submit a question...")
+    st.write("Waiting for host to post a question...")
 
 st.markdown("---")
-st.write("Revealed answers (updates when host reveals):")
-for p, revealed in st.session_state.revealed.items():
-    if revealed:
-        st.write(f"- {p}: {st.session_state.answers.get(p,'')}")
+st.header("Reveal view")
+st.write("Answers revealed by host will appear below.")
+for p in st.session_state.players:
+    pid = p["id"]
+    if st.session_state.revealed.get(pid, False):
+        st.write(f"- {p['name']}: {st.session_state.answers.get(pid,{}).get('answer','')}")
     else:
-        st.write(f"- {p}: ???")
+        st.write(f"- {p['name']}: ???")
 
+st.markdown("---")
+# Mini leaderboard popup when reveals are present
+if any(st.session_state.revealed.values()):
+    st.subheader("Leaderboard")
+    sorted_players = sorted(st.session_state.players, key=lambda x: x["score"], reverse=True)
+    for i,pl in enumerate(sorted_players, 1):
+        st.write(f"{i}. {pl['name']} — {pl['score']}")
